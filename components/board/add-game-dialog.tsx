@@ -16,10 +16,48 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel, FieldDescription } from '@/components/ui/field'
 import { useStore } from '@/lib/store'
+import { authClient } from '@/lib/auth-client'
+
+function compressImage(file: File, maxDim = 800, quality = 0.75): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const img = new Image()
+      img.onload = () => {
+        let { width, height } = img
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width)
+            width = maxDim
+          } else {
+            width = Math.round((width * maxDim) / height)
+            height = maxDim
+          }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          resolve(e.target?.result as string)
+          return
+        }
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      }
+      img.onerror = () => reject(new Error('Error al procesar la imagen'))
+      img.src = e.target?.result as string
+    }
+    reader.onerror = () => reject(new Error('Error al leer el archivo'))
+    reader.readAsDataURL(file)
+  })
+}
 
 export function AddGameDialog({ groupId }: { groupId: string }) {
   const { addGame } = useStore()
+  const { data: session } = authClient.useSession()
   const [open, setOpen] = React.useState(false)
+  const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [name, setName] = React.useState('')
   const [category, setCategory] = React.useState('')
   const [minutes, setMinutes] = React.useState('')
@@ -34,34 +72,49 @@ export function AddGameDialog({ groupId }: { groupId: string }) {
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     if (!file.type.startsWith('image/')) {
       toast.error('El archivo debe ser una imagen')
       return
     }
-    const reader = new FileReader()
-    reader.onload = () => setPhoto(reader.result as string)
-    reader.readAsDataURL(file)
+    try {
+      const compressed = await compressImage(file)
+      setPhoto(compressed)
+    } catch {
+      toast.error('No se pudo procesar la imagen')
+    }
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (!session?.user) {
+      toast.error('Tenés que iniciar sesión para agregar juegos')
+      return
+    }
     if (!name.trim()) {
       toast.error('Ponele un nombre al juego')
       return
     }
-    addGame({
-      groupId,
-      name: name.trim(),
-      category: category.trim() || undefined,
-      suggestedMinutes: minutes ? Number(minutes) : undefined,
-      photoUrl: photo,
-    })
-    toast.success(`"${name.trim()}" agregado`)
-    setOpen(false)
-    reset()
+
+    setIsSubmitting(true)
+    try {
+      const ok = await addGame({
+        groupId,
+        name: name.trim(),
+        category: category.trim() || undefined,
+        suggestedMinutes: minutes ? Number(minutes) : undefined,
+        photoUrl: photo,
+      })
+      if (ok) {
+        toast.success(`"${name.trim()}" agregado`)
+        setOpen(false)
+        reset()
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -165,7 +218,9 @@ export function AddGameDialog({ groupId }: { groupId: string }) {
           </FieldGroup>
 
           <DialogFooter className="mt-5">
-            <Button type="submit">Guardar juego</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Guardando...' : 'Guardar juego'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

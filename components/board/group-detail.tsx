@@ -57,19 +57,23 @@ function AddPlayerDialog({ groupId }: { groupId: string }) {
       )
   )
 
-  function submitGuest(e: React.FormEvent) {
+  async function submitGuest(e: React.FormEvent) {
     e.preventDefault()
     if (!name.trim()) return toast.error('Escribí un nombre')
-    addPlayer(groupId, name.trim())
-    toast.success(`${name.trim()} se sumó al grupo`)
-    setName('')
-    setOpen(false)
+    const ok = await addPlayer(groupId, name.trim())
+    if (ok) {
+      toast.success(`${name.trim()} se sumó al grupo`)
+      setName('')
+      setOpen(false)
+    }
   }
 
-  function handleAddFriend(friend: { id: string; name: string }) {
-    addPlayer(groupId, friend.name, friend.id)
-    toast.success(`${friend.name} se sumó al grupo`)
-    setOpen(false)
+  async function handleAddFriend(friend: { id: string; name: string }) {
+    const ok = await addPlayer(groupId, friend.name, friend.id)
+    if (ok) {
+      toast.success(`${friend.name} se sumó al grupo`)
+      setOpen(false)
+    }
   }
 
   return (

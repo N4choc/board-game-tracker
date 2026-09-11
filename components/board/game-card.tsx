@@ -42,9 +42,11 @@ export function GameCard({ game }: { game: Game }) {
               <DropdownMenuGroup>
                 <DropdownMenuItem
                   variant="destructive"
-                  onClick={() => {
-                    deleteGame(game.id)
-                    toast.success(`"${game.name}" eliminado`)
+                  onClick={async () => {
+                    const ok = await deleteGame(game.id)
+                    if (ok) {
+                      toast.success(`"${game.name}" eliminado`)
+                    }
                   }}
                 >
                   <Trash2 />

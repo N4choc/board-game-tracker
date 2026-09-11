@@ -67,9 +67,11 @@ export function MatchHistory({ matches }: { matches: Match[] }) {
             size="icon-sm"
             aria-label="Eliminar partida"
             className="shrink-0 text-muted-foreground hover:text-destructive"
-            onClick={() => {
-              deleteMatch(m.id)
-              toast.success('Partida eliminada')
+            onClick={async () => {
+              const ok = await deleteMatch(m.id)
+              if (ok) {
+                toast.success('Partida eliminada')
+              }
             }}
           >
             <Trash2 />

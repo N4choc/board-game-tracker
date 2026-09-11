@@ -33,15 +33,15 @@ const emptyState: State = {
 export type PlayerInput = string | { name: string; userId?: string | null }
 
 type StoreValue = State & {
-  addGroup: (name: string, players: PlayerInput[]) => string
+  addGroup: (name: string, players: PlayerInput[]) => Promise<string | null>
   deleteGroup: (groupId: string) => Promise<boolean>
   leaveGroup: (groupId: string) => Promise<boolean>
-  addPlayer: (groupId: string, name: string, userId?: string | null) => void
+  addPlayer: (groupId: string, name: string, userId?: string | null) => Promise<boolean>
   removePlayer: (playerId: string) => void
-  addGame: (game: Omit<Game, 'id'>) => void
-  deleteGame: (gameId: string) => void
-  addMatch: (match: Omit<Match, 'id'>) => void
-  deleteMatch: (matchId: string) => void
+  addGame: (game: Omit<Game, 'id'>) => Promise<boolean>
+  deleteGame: (gameId: string) => Promise<boolean>
+  addMatch: (match: Omit<Match, 'id'>) => Promise<boolean>
+  deleteMatch: (matchId: string) => Promise<boolean>
   refresh: () => Promise<void>
 }
 
@@ -54,7 +54,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const fetchData = React.useCallback(async () => {
     try {
       const res = await fetch('/api/board')
-      if (!res.ok) return
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        console.error('[Store] Error al obtener datos:', data.error || res.statusText)
+        return
+      }
       const data = await res.json()
       if (Array.isArray(data.groups)) {
         setState({
@@ -68,15 +72,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           players: (data.players ?? []).map((p: any) => ({
             id: p.id,
             groupId:
-              data.groupPlayers?.find((x: any) => x.playerId === p.id)?.groupId ??
-              data.groupPlayers?.find((x: any) => x.player_id === p.id)?.group_id ??
+              data.groupPlayers?.find((x: any) => (x.playerId ?? x.player_id) === p.id)?.groupId ??
+              data.groupPlayers?.find((x: any) => (x.playerId ?? x.player_id) === p.id)?.group_id ??
               '',
             name: p.name,
             userId: p.userId ?? p.user_id ?? null,
           })),
           games: (data.games ?? []).map((g: any) => ({
             id: g.id,
-            groupId: data.groupGames?.find((x: any) => x.gameId === g.id)?.groupId,
+            groupId:
+              data.groupGames?.find((x: any) => (x.gameId ?? x.game_id) === g.id)?.groupId ??
+              data.groupGames?.find((x: any) => (x.gameId ?? x.game_id) === g.id)?.group_id ??
+              '',
             name: g.name,
             photoUrl: g.imageUrl ?? g.image_url,
             category: g.description,
@@ -89,13 +96,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             durationMinutes: m.durationMinutes ?? m.duration_minutes,
             playedAt: m.playedAt ?? m.played_at,
             playerIds: (data.matchPlayers ?? [])
-              .filter((x: any) => x.matchId === m.id)
-              .map((x: any) => x.playerId),
+              .filter((x: any) => (x.matchId ?? x.match_id) === m.id)
+              .map((x: any) => x.playerId ?? x.player_id),
           })),
         })
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      console.error('[Store] Error de conexión:', err)
     }
   }, [])
 
@@ -105,27 +112,59 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     fetchData()
   }, [fetchData])
 
-  const persist = React.useCallback((payload: unknown) => {
-    fetch('/api/board', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => {})
-  }, [])
+  const persist = React.useCallback(
+    async (payload: unknown): Promise<boolean> => {
+      try {
+        const res = await fetch('/api/board', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || 'Error al guardar en el servidor')
+          await fetchData()
+          return false
+        }
+        return true
+      } catch (err: any) {
+        toast.error(err.message || 'Error de conexión con el servidor')
+        await fetchData()
+        return false
+      }
+    },
+    [fetchData]
+  )
 
-  const remove = React.useCallback((type: 'group' | 'game' | 'match', id: string) => {
-    fetch('/api/board', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, id }),
-    }).catch(() => {})
-  }, [])
+  const remove = React.useCallback(
+    async (type: 'group' | 'game' | 'match', id: string): Promise<boolean> => {
+      try {
+        const res = await fetch('/api/board', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, id }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || 'Error al eliminar')
+          await fetchData()
+          return false
+        }
+        return true
+      } catch (err: any) {
+        toast.error(err.message || 'Error de conexión con el servidor')
+        await fetchData()
+        return false
+      }
+    },
+    [fetchData]
+  )
 
   const value = React.useMemo<StoreValue>(() => {
     return {
       ...state,
       refresh: fetchData,
-      addGroup(name, rawPlayers) {
+      async addGroup(name, rawPlayers) {
         const id = 'g-' + uid()
         const inviteCode = Math.random().toString(36).slice(2, 10)
         const group: Group = {
@@ -151,7 +190,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
 
         setState((s) => ({ ...s, groups: [...s.groups, group], players: [...s.players, ...players] }))
-        persist({
+        const ok = await persist({
           type: 'group',
           id,
           group: { id, name: group.name, color: 'amber', description: null, inviteCode },
@@ -163,7 +202,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             userId: p.userId,
           })),
         })
-        return id
+        return ok ? id : null
       },
       async deleteGroup(groupId) {
         try {
@@ -210,7 +249,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return false
         }
       },
-      addPlayer(groupId, name, userId) {
+      async addPlayer(groupId, name, userId) {
         const player: Player = {
           id: 'p-' + uid(),
           groupId,
@@ -218,7 +257,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           userId: userId || null,
         }
         setState((s) => ({ ...s, players: [...s.players, player] }))
-        persist({
+        const ok = await persist({
           type: 'player',
           id: player.id,
           groupId,
@@ -230,14 +269,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             userId: player.userId,
           },
         })
+        return ok
       },
       removePlayer(playerId) {
         setState((s) => ({ ...s, players: s.players.filter((p) => p.id !== playerId) }))
       },
-      addGame(game) {
+      async addGame(game) {
         const full: Game = { ...game, id: 'game-' + uid() }
         setState((s) => ({ ...s, games: [...s.games, full] }))
-        persist({
+        const ok = await persist({
           type: 'game',
           id: full.id,
           groupId: full.groupId,
@@ -249,19 +289,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             color: 'amber',
           },
         })
+        return ok
       },
-      deleteGame(gameId) {
+      async deleteGame(gameId) {
         setState((s) => ({
           ...s,
           games: s.games.filter((g) => g.id !== gameId),
           matches: s.matches.filter((m) => m.gameId !== gameId),
         }))
-        remove('game', gameId)
+        return await remove('game', gameId)
       },
-      addMatch(match) {
+      async addMatch(match) {
         const full: Match = { ...match, id: 'm-' + uid() }
         setState((s) => ({ ...s, matches: [...s.matches, full] }))
-        persist({
+        const ok = await persist({
           type: 'match',
           id: full.id,
           match: {
@@ -270,14 +311,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             gameId: full.gameId,
             winnerId: full.winnerId,
             durationMinutes: full.durationMinutes,
-            playedAt: new Date(full.playedAt),
+            playedAt: full.playedAt,
           },
           playerIds: full.playerIds,
         })
+        return ok
       },
-      deleteMatch(matchId) {
+      async deleteMatch(matchId) {
         setState((s) => ({ ...s, matches: s.matches.filter((m) => m.id !== matchId) }))
-        remove('match', matchId)
+        return await remove('match', matchId)
       },
     }
   }, [state, persist, remove, fetchData])

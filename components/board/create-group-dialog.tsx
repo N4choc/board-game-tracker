@@ -71,6 +71,8 @@ export function CreateGroupDialog({ onCreated }: { onCreated?: (id: string) => v
     })
   }
 
+  const [isSubmitting, setIsSubmitting] = React.useState(false)
+
   // Friends not currently in form
   const availableFriends = friends.filter(
     (f) =>
@@ -79,8 +81,12 @@ export function CreateGroupDialog({ onCreated }: { onCreated?: (id: string) => v
       )
   )
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (!session?.user) {
+      toast.error('Iniciá sesión para crear un grupo')
+      return
+    }
     const cleanName = name.trim()
     const cleanPlayers = players.filter((p) => p.name.trim())
     if (!cleanName) {
@@ -91,11 +97,19 @@ export function CreateGroupDialog({ onCreated }: { onCreated?: (id: string) => v
       toast.error('Agregá al menos 2 jugadores')
       return
     }
-    const id = addGroup(cleanName, cleanPlayers)
-    toast.success(`Grupo "${cleanName}" creado`)
-    setOpen(false)
-    reset()
-    onCreated?.(id)
+
+    setIsSubmitting(true)
+    try {
+      const id = await addGroup(cleanName, cleanPlayers)
+      if (id) {
+        toast.success(`Grupo "${cleanName}" creado`)
+        setOpen(false)
+        reset()
+        onCreated?.(id)
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -201,7 +215,9 @@ export function CreateGroupDialog({ onCreated }: { onCreated?: (id: string) => v
           </FieldGroup>
 
           <DialogFooter className="mt-5">
-            <Button type="submit">Crear grupo</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creando...' : 'Crear grupo'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

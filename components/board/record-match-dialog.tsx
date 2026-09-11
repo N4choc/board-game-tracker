@@ -24,13 +24,16 @@ import {
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/lib/store'
+import { authClient } from '@/lib/auth-client'
 
 export function RecordMatchDialog({ groupId }: { groupId: string }) {
   const { games, players, addMatch } = useStore()
+  const { data: session } = authClient.useSession()
   const groupGames = games.filter((g) => g.groupId === groupId)
   const groupPlayers = players.filter((p) => p.groupId === groupId)
 
   const [open, setOpen] = React.useState(false)
+  const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [gameId, setGameId] = React.useState('')
   const [participants, setParticipants] = React.useState<string[]>([])
   const [winnerId, setWinnerId] = React.useState('')
@@ -53,24 +56,32 @@ export function RecordMatchDialog({ groupId }: { groupId: string }) {
     })
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (!session?.user) return toast.error('Iniciá sesión para registrar partidas')
     if (!gameId) return toast.error('Elegí un juego')
     if (participants.length < 2) return toast.error('Elegí al menos 2 participantes')
     if (!winnerId) return toast.error('Marcá quién ganó')
     if (!duration || Number(duration) <= 0) return toast.error('Cargá la duración')
 
-    addMatch({
-      groupId,
-      gameId,
-      playerIds: participants,
-      winnerId,
-      durationMinutes: Number(duration),
-      playedAt: date,
-    })
-    toast.success('Partida registrada')
-    setOpen(false)
-    reset()
+    setIsSubmitting(true)
+    try {
+      const ok = await addMatch({
+        groupId,
+        gameId,
+        playerIds: participants,
+        winnerId,
+        durationMinutes: Number(duration),
+        playedAt: date,
+      })
+      if (ok) {
+        toast.success('Partida registrada')
+        setOpen(false)
+        reset()
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const winnerCandidates = groupPlayers.filter((p) => participants.includes(p.id))
@@ -188,7 +199,9 @@ export function RecordMatchDialog({ groupId }: { groupId: string }) {
           </FieldGroup>
 
           <DialogFooter className="mt-5">
-            <Button type="submit">Guardar partida</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Guardando...' : 'Guardar partida'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

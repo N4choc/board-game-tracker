@@ -14,106 +14,128 @@ import { auth } from '@/lib/auth'
 import { headers } from 'next/headers'
 
 export async function GET() {
-  const [groups, players, groupPlayers, games, groupGames, matches, matchPlayers] = await Promise.all([
-    db.select().from(boardGroups),
-    db.select().from(boardPlayers),
-    db.select().from(boardGroupPlayers),
-    db.select().from(boardGames),
-    db.select().from(boardGroupGames),
-    db.select().from(boardMatches),
-    db.select().from(boardMatchPlayers),
-  ])
+  try {
+    const [groups, players, groupPlayers, games, groupGames, matches, matchPlayers] = await Promise.all([
+      db.select().from(boardGroups),
+      db.select().from(boardPlayers),
+      db.select().from(boardGroupPlayers),
+      db.select().from(boardGames),
+      db.select().from(boardGroupGames),
+      db.select().from(boardMatches),
+      db.select().from(boardMatchPlayers),
+    ])
 
-  // Ensure all groups have an invite_code in parallel if any are missing
-  const missingInvite = groups.filter((g) => !g.inviteCode)
-  if (missingInvite.length > 0) {
-    await Promise.all(
-      missingInvite.map(async (g) => {
-        const code = Math.random().toString(36).slice(2, 10)
-        await db.update(boardGroups).set({ inviteCode: code }).where(eq(boardGroups.id, g.id))
-        g.inviteCode = code
-      })
+    // Ensure all groups have an invite_code in parallel if any are missing
+    const missingInvite = groups.filter((g) => !g.inviteCode)
+    if (missingInvite.length > 0) {
+      await Promise.all(
+        missingInvite.map(async (g) => {
+          const code = Math.random().toString(36).slice(2, 10)
+          await db.update(boardGroups).set({ inviteCode: code }).where(eq(boardGroups.id, g.id))
+          g.inviteCode = code
+        })
+      )
+    }
+
+    return NextResponse.json(
+      { groups, players, groupPlayers, games, groupGames, matches, matchPlayers },
+      {
+        headers: {
+          'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+        },
+      }
+    )
+  } catch (err: any) {
+    console.error('[API /api/board GET error]:', err)
+    return NextResponse.json(
+      { error: err?.message || 'Error al obtener datos de la base de datos' },
+      { status: 500 }
     )
   }
-
-  return NextResponse.json(
-    { groups, players, groupPlayers, games, groupGames, matches, matchPlayers },
-    {
-      headers: {
-        'Cache-Control': 'private, no-cache, no-store, must-revalidate',
-      },
-    }
-  )
 }
 
 export async function POST(request: Request) {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const body = await request.json()
-  const id = String(body.id || '')
-  if (!id || !['group', 'player', 'game', 'match'].includes(body.type)) {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })
-  }
+  try {
+    const session = await auth.api.getSession({ headers: await headers() })
+    if (!session?.user) return NextResponse.json({ error: 'No autorizado. Iniciá sesión para guardar cambios.' }, { status: 401 })
+    const body = await request.json()
+    const id = String(body.id || '')
+    if (!id || !['group', 'player', 'game', 'match'].includes(body.type)) {
+      return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 })
+    }
 
-  if (body.type === 'group') {
-    const inviteCode = body.group.inviteCode || Math.random().toString(36).slice(2, 10)
-    const rawPlayers: any[] = body.players ?? []
+    if (body.type === 'group') {
+      const inviteCode = body.group.inviteCode || Math.random().toString(36).slice(2, 10)
+      const rawPlayers: any[] = body.players ?? []
 
-    await db.transaction(async (tx) => {
-      await tx.insert(boardGroups).values({
-        ...body.group,
-        createdBy: session.user.id,
-        inviteCode,
+      await db.transaction(async (tx) => {
+        await tx.insert(boardGroups).values({
+          ...body.group,
+          createdBy: session.user.id,
+          inviteCode,
+        })
+
+        if (rawPlayers.length > 0) {
+          const playersToInsert = rawPlayers.map((player) => ({
+            ...player,
+            userId:
+              player.userId ||
+              (player.name.toLowerCase() === session.user.name.toLowerCase() ? session.user.id : null),
+          }))
+          const groupPlayersToInsert = rawPlayers.map((player) => ({
+            groupId: id,
+            playerId: player.id,
+          }))
+
+          await tx.insert(boardPlayers).values(playersToInsert)
+          await tx.insert(boardGroupPlayers).values(groupPlayersToInsert)
+        }
       })
+    }
 
-      if (rawPlayers.length > 0) {
-        const playersToInsert = rawPlayers.map((player) => ({
-          ...player,
-          userId:
-            player.userId ||
-            (player.name.toLowerCase() === session.user.name.toLowerCase() ? session.user.id : null),
-        }))
-        const groupPlayersToInsert = rawPlayers.map((player) => ({
-          groupId: id,
-          playerId: player.id,
-        }))
-
-        await tx.insert(boardPlayers).values(playersToInsert)
-        await tx.insert(boardGroupPlayers).values(groupPlayersToInsert)
-      }
-    })
-  }
-
-  if (body.type === 'player') {
-    await db.transaction(async (tx) => {
-      await tx.insert(boardPlayers).values({
-        ...body.player,
-        userId: body.player.userId || null,
+    if (body.type === 'player') {
+      await db.transaction(async (tx) => {
+        await tx.insert(boardPlayers).values({
+          ...body.player,
+          userId: body.player.userId || null,
+        })
+        await tx.insert(boardGroupPlayers).values({ groupId: body.groupId, playerId: body.player.id })
       })
-      await tx.insert(boardGroupPlayers).values({ groupId: body.groupId, playerId: body.player.id })
-    })
-  }
+    }
 
-  if (body.type === 'game') {
-    await db.transaction(async (tx) => {
-      await tx.insert(boardGames).values(body.game)
-      await tx.insert(boardGroupGames).values({ groupId: body.groupId, gameId: id })
-    })
-  }
+    if (body.type === 'game') {
+      await db.transaction(async (tx) => {
+        await tx.insert(boardGames).values(body.game)
+        await tx.insert(boardGroupGames).values({ groupId: body.groupId, gameId: id })
+      })
+    }
 
-  if (body.type === 'match') {
-    const playerIds: string[] = body.playerIds ?? []
-    await db.transaction(async (tx) => {
-      await tx.insert(boardMatches).values(body.match)
-      if (playerIds.length > 0) {
-        await tx.insert(boardMatchPlayers).values(
-          playerIds.map((playerId) => ({ matchId: id, playerId }))
-        )
-      }
-    })
-  }
+    if (body.type === 'match') {
+      const playerIds: string[] = body.playerIds ?? []
+      const rawPlayedAt = body.match?.playedAt ? new Date(body.match.playedAt) : new Date()
+      const playedAt = Number.isNaN(rawPlayedAt.getTime()) ? new Date() : rawPlayedAt
 
-  return NextResponse.json({ ok: true })
+      await db.transaction(async (tx) => {
+        await tx.insert(boardMatches).values({
+          ...body.match,
+          playedAt,
+        })
+        if (playerIds.length > 0) {
+          await tx.insert(boardMatchPlayers).values(
+            playerIds.map((playerId) => ({ matchId: id, playerId }))
+          )
+        }
+      })
+    }
+
+    return NextResponse.json({ ok: true })
+  } catch (err: any) {
+    console.error('[API /api/board POST error]:', err)
+    return NextResponse.json(
+      { error: err?.message || 'Error al guardar en la base de datos' },
+      { status: 500 }
+    )
+  }
 }
 
 export async function DELETE(request: Request) {
